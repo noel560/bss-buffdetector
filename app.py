@@ -3,35 +3,19 @@ import numpy as np
 import mss
 import time
 import pyttsx3
+import threading
+import tkinter as tk
 
 # -----------------------------
-# BUFF TEMPLATEK (1x–10x)
+# TEMPLATEK
 # -----------------------------
 
 buff_templates = [
-    cv2.imread("new1.png", 0),
-    cv2.imread("new2.png", 0),
-    cv2.imread("new3.png", 0),
-    cv2.imread("new4.png", 0),
-    cv2.imread("new5.png", 0),
-    cv2.imread("new6.png", 0),
-    cv2.imread("new7.png", 0),
-    cv2.imread("new8.png", 0),
-    cv2.imread("new9.png", 0),
-    cv2.imread("new10.png", 0),
+    cv2.imread(f"new{i}.png", 0) for i in range(1, 11)
 ]
 
-# -----------------------------
-# TOKEN / "PARTICLE" TEMPLATEK
-# -----------------------------
-
 token_templates = [
-    cv2.imread("par1.png", 0),
-    cv2.imread("par2.png", 0),
-    cv2.imread("par3.png", 0),
-    cv2.imread("par4.png", 0),
-    cv2.imread("par5.png", 0),
-    cv2.imread("precision_template.png", 0),
+    cv2.imread(f"par{i}.png", 0) for i in range(1, 6)
 ]
 
 # -----------------------------
@@ -43,9 +27,30 @@ TOKEN_THRESHOLD = 0.7
 
 timer_end = 0
 token_last = False
-alerted = False
 
+# TTS
 engine = pyttsx3.init()
+tts_active = False
+
+# -----------------------------
+# TKINTER ABLAK
+# -----------------------------
+
+root = tk.Tk()
+root.title("Precision Timer")
+
+root.attributes("-topmost", True)
+root.geometry("220x80+50+50")
+root.resizable(False, False)
+
+label = tk.Label(
+    root,
+    text="Precision: Nincs",
+    font=("Segoe UI", 16),
+    fg="white",
+    bg="black"
+)
+label.pack(fill="both", expand=True)
 
 # -----------------------------
 # ROI-K
@@ -66,120 +71,129 @@ token_roi = {
 }
 
 # -----------------------------
-# LOOP
+# TTS THREAD
 # -----------------------------
 
-with mss.mss() as sct:
+def tts_loop():
+    global tts_active
+    while tts_active:
+        engine.say("Precision")
+        engine.runAndWait()
+        time.sleep(2.5)
 
-    while True:
-        now = time.time()
+# -----------------------------
+# DETECTION LOOP THREAD
+# -----------------------------
 
-        buff_img = np.array(sct.grab(buff_roi))
-        token_img = np.array(sct.grab(token_roi))
+def detection_loop():
+    global timer_end, token_last, tts_active
 
-        buff_gray = cv2.cvtColor(buff_img, cv2.COLOR_BGR2GRAY)
-        token_gray = cv2.cvtColor(token_img, cv2.COLOR_BGR2GRAY)
+    with mss.mss() as sct:
 
-        # -------------------------
-        # BUFF DETECT
-        # -------------------------
+        while True:
+            now = time.time()
 
-        buff_found = False
+            buff_img = np.array(sct.grab(buff_roi))
+            token_img = np.array(sct.grab(token_roi))
 
-        for template in buff_templates:
-            if template is None:
-                continue
+            buff_gray = cv2.cvtColor(buff_img, cv2.COLOR_BGR2GRAY)
+            token_gray = cv2.cvtColor(token_img, cv2.COLOR_BGR2GRAY)
 
-            h, w = template.shape
+            # -----------------
+            # BUFF DETECT
+            # -----------------
 
-            res = cv2.matchTemplate(
-                buff_gray,
-                template,
-                cv2.TM_CCOEFF_NORMED
-            )
+            buff_found = False
 
-            loc = np.where(res >= BUFF_THRESHOLD)
+            for template in buff_templates:
+                if template is None:
+                    continue
 
-            for pt in zip(*loc[::-1]):
-                buff_found = True
-                cv2.rectangle(
-                    buff_img,
-                    pt,
-                    (pt[0] + w, pt[1] + h),
-                    (0, 255, 0),
-                    2
+                res = cv2.matchTemplate(
+                    buff_gray,
+                    template,
+                    cv2.TM_CCOEFF_NORMED
                 )
 
-        # -------------------------
-        # TOKEN DETECT (MULTI)
-        # -------------------------
+                if np.max(res) >= BUFF_THRESHOLD:
+                    buff_found = True
+                    break
 
-        token_found = False
+            # -----------------
+            # TOKEN DETECT
+            # -----------------
 
-        for template in token_templates:
-            if template is None:
-                continue
+            token_found = False
 
-            h, w = template.shape
+            for template in token_templates:
+                if template is None:
+                    continue
 
-            res = cv2.matchTemplate(
-                token_gray,
-                template,
-                cv2.TM_CCOEFF_NORMED
-            )
-
-            loc = np.where(res >= TOKEN_THRESHOLD)
-
-            for pt in zip(*loc[::-1]):
-                token_found = True
-                cv2.rectangle(
-                    token_img,
-                    pt,
-                    (pt[0] + w, pt[1] + h),
-                    (255, 0, 0),
-                    2
+                res = cv2.matchTemplate(
+                    token_gray,
+                    template,
+                    cv2.TM_CCOEFF_NORMED
                 )
 
-        # -------------------------
-        # TIMER LOGIKA
-        # -------------------------
+                if np.max(res) >= TOKEN_THRESHOLD:
+                    token_found = True
+                    break
 
-        # Pickup → reset
-        if token_found and not token_last:
-            timer_end = now + 60
-            alerted = False
-            print("Precision pickup → Timer reset")
+            # -----------------
+            # TIMER LOGIKA
+            # -----------------
 
-        # Buff eltűnt → stop
-        if not buff_found:
-            timer_end = 0
-            alerted = False
+            if token_found and not token_last:
+                timer_end = now + 60
+                print("Precision pickup → reset")
 
-        token_last = token_found
+            if not buff_found:
+                timer_end = 0
 
-        # -------------------------
-        # TIMER / ALERT
-        # -------------------------
+            token_last = token_found
 
-        if timer_end > now:
-            remaining = timer_end - now
-            print(f"Hátralévő idő: {remaining:.1f}s")
+            # -----------------
+            # UI + TTS
+            # -----------------
 
-            if remaining <= 20 and not alerted:
-                engine.say("Precision")
-                engine.runAndWait()
-                alerted = True
-        else:
-            print("Precision nincs / lejárt")
+            if timer_end > now:
+                remaining = timer_end - now
 
-        # -------------------------
-        # PREVIEW
-        # -------------------------
+                if remaining > 20:
+                    text = f"Precision: {int(remaining)}s"
+                    label.config(text=text, fg="white")
 
-        cv2.imshow("Buff ROI", buff_img)
-        cv2.imshow("Token ROI", token_img)
+                    tts_active = False
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+                else:
+                    label.config(
+                        text="Precision: Refresh",
+                        fg="red"
+                    )
 
-        time.sleep(0.1)
+                    if not tts_active:
+                        tts_active = True
+                        threading.Thread(
+                            target=tts_loop,
+                            daemon=True
+                        ).start()
+
+            else:
+                label.config(
+                    text="Precision: Nincs",
+                    fg="gray"
+                )
+                tts_active = False
+
+            time.sleep(0.1)
+
+# -----------------------------
+# THREAD INDÍTÁS
+# -----------------------------
+
+threading.Thread(
+    target=detection_loop,
+    daemon=True
+).start()
+
+root.mainloop()
