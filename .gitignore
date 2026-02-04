@@ -1,0 +1,14 @@
+buffs/
+screenshot/
+train/
+try2/
+app_gdip.ahk
+app.ahk
+backup1.ahk
+best640.pt
+buffdetect-best.pt
+Gdip_All.ahk
+Gdip_ImageSearch.ahk
+main.py
+
+*.png
