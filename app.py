@@ -5,7 +5,7 @@ import time
 import pyttsx3
 
 # -----------------------------
-# TEMPLATE BETÖLTÉS
+# BUFF TEMPLATEK (1x–10x)
 # -----------------------------
 
 buff_templates = [
@@ -21,21 +21,30 @@ buff_templates = [
     cv2.imread("new10.png", 0),
 ]
 
-# Precision pickup particle template
-particle_template = cv2.imread("precision_template.png", 0)
+# -----------------------------
+# TOKEN / "PARTICLE" TEMPLATEK
+# -----------------------------
+
+token_templates = [
+    cv2.imread("par1.png", 0),
+    cv2.imread("par2.png", 0),
+    cv2.imread("par3.png", 0),
+    cv2.imread("par4.png", 0),
+    cv2.imread("par5.png", 0),
+    cv2.imread("precision_template.png", 0),
+]
 
 # -----------------------------
 # BEÁLLÍTÁSOK
 # -----------------------------
 
-BUFF_THRESHOLD = 0.8
-PARTICLE_THRESHOLD = 0.75
+BUFF_THRESHOLD = 0.75
+TOKEN_THRESHOLD = 0.7
 
 timer_end = 0
-particle_last = False
+token_last = False
 alerted = False
 
-# TTS
 engine = pyttsx3.init()
 
 # -----------------------------
@@ -49,7 +58,7 @@ buff_roi = {
     "height": 100
 }
 
-particle_roi = {
+token_roi = {
     "top": 300,
     "left": 800,
     "width": 300,
@@ -57,7 +66,7 @@ particle_roi = {
 }
 
 # -----------------------------
-# MSS LOOP
+# LOOP
 # -----------------------------
 
 with mss.mss() as sct:
@@ -65,12 +74,11 @@ with mss.mss() as sct:
     while True:
         now = time.time()
 
-        # Screenshotok
         buff_img = np.array(sct.grab(buff_roi))
-        particle_img = np.array(sct.grab(particle_roi))
+        token_img = np.array(sct.grab(token_roi))
 
         buff_gray = cv2.cvtColor(buff_img, cv2.COLOR_BGR2GRAY)
-        particle_gray = cv2.cvtColor(particle_img, cv2.COLOR_BGR2GRAY)
+        token_gray = cv2.cvtColor(token_img, cv2.COLOR_BGR2GRAY)
 
         # -------------------------
         # BUFF DETECT
@@ -82,68 +90,94 @@ with mss.mss() as sct:
             if template is None:
                 continue
 
-            res = cv2.matchTemplate(buff_gray, template, cv2.TM_CCOEFF_NORMED)
+            h, w = template.shape
 
-            if np.max(res) >= BUFF_THRESHOLD:
-                buff_found = True
-                break
-
-        # -------------------------
-        # PARTICLE DETECT
-        # -------------------------
-
-        particle_found = False
-
-        if particle_template is not None:
-            res2 = cv2.matchTemplate(
-                particle_gray,
-                particle_template,
+            res = cv2.matchTemplate(
+                buff_gray,
+                template,
                 cv2.TM_CCOEFF_NORMED
             )
 
-            if np.max(res2) >= PARTICLE_THRESHOLD:
-                particle_found = True
+            loc = np.where(res >= BUFF_THRESHOLD)
+
+            for pt in zip(*loc[::-1]):
+                buff_found = True
+                cv2.rectangle(
+                    buff_img,
+                    pt,
+                    (pt[0] + w, pt[1] + h),
+                    (0, 255, 0),
+                    2
+                )
+
+        # -------------------------
+        # TOKEN DETECT (MULTI)
+        # -------------------------
+
+        token_found = False
+
+        for template in token_templates:
+            if template is None:
+                continue
+
+            h, w = template.shape
+
+            res = cv2.matchTemplate(
+                token_gray,
+                template,
+                cv2.TM_CCOEFF_NORMED
+            )
+
+            loc = np.where(res >= TOKEN_THRESHOLD)
+
+            for pt in zip(*loc[::-1]):
+                token_found = True
+                cv2.rectangle(
+                    token_img,
+                    pt,
+                    (pt[0] + w, pt[1] + h),
+                    (255, 0, 0),
+                    2
+                )
 
         # -------------------------
         # TIMER LOGIKA
         # -------------------------
 
         # Pickup → reset
-        if particle_found and not particle_last:
+        if token_found and not token_last:
             timer_end = now + 60
             alerted = False
-            print("Precision REFRESH → Timer reset 60s")
+            print("Precision pickup → Timer reset")
 
         # Buff eltűnt → stop
         if not buff_found:
             timer_end = 0
             alerted = False
 
-        particle_last = particle_found
+        token_last = token_found
 
         # -------------------------
-        # TIMER KIÍRÁS
+        # TIMER / ALERT
         # -------------------------
 
         if timer_end > now:
             remaining = timer_end - now
             print(f"Hátralévő idő: {remaining:.1f}s")
 
-            # 20s TTS alert
             if remaining <= 20 and not alerted:
                 engine.say("Precision")
                 engine.runAndWait()
                 alerted = True
-
         else:
             print("Precision nincs / lejárt")
 
         # -------------------------
-        # DEBUG ABLAKOK
+        # PREVIEW
         # -------------------------
 
         cv2.imshow("Buff ROI", buff_img)
-        cv2.imshow("Particle ROI", particle_img)
+        cv2.imshow("Token ROI", token_img)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
