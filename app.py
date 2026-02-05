@@ -7,30 +7,39 @@ import threading
 import tkinter as tk
 
 # -----------------------------
-# TEMPLATEK
-# -----------------------------
-
-buff_templates = [
-    cv2.imread(f"new{i}.png", 0) for i in range(1, 11)
-]
-
-token_templates = [
-    cv2.imread(f"par{i}.png", 0) for i in range(1, 6)
-]
-
-# -----------------------------
 # BEÁLLÍTÁSOK
 # -----------------------------
 
-BUFF_THRESHOLD = 0.75
-TOKEN_THRESHOLD = 0.7
+DEBUG = True
+
+# Precision szem színe (#9429FA → BGR)
+TARGET_COLOR = np.array([250, 41, 148])
+COLOR_TOLERANCE = 20
+
+# Minimum pixel cluster
+PIXEL_COUNT_THRESHOLD = 80
+
+# Pickup védelem
+FRAME_CONFIRM = 10
+PICKUP_COOLDOWN = 1.5
 
 timer_end = 0
-token_last = False
+token_frames = 0
+last_pickup_time = 0
 
+# -----------------------------
 # TTS
+# -----------------------------
+
 engine = pyttsx3.init()
 tts_active = False
+
+def tts_loop():
+    global tts_active
+    while tts_active:
+        engine.say("Precision")
+        engine.runAndWait()
+        time.sleep(2.5)
 
 # -----------------------------
 # TKINTER ABLAK
@@ -38,7 +47,6 @@ tts_active = False
 
 root = tk.Tk()
 root.title("Precision Timer")
-
 root.attributes("-topmost", True)
 root.geometry("220x80+50+50")
 root.resizable(False, False)
@@ -53,15 +61,8 @@ label = tk.Label(
 label.pack(fill="both", expand=True)
 
 # -----------------------------
-# ROI-K
+# ROI (SZEM HELYE)
 # -----------------------------
-
-buff_roi = {
-    "top": 40,
-    "left": 0,
-    "width": 1920,
-    "height": 100
-}
 
 token_roi = {
     "top": 300,
@@ -71,86 +72,57 @@ token_roi = {
 }
 
 # -----------------------------
-# TTS THREAD
-# -----------------------------
-
-def tts_loop():
-    global tts_active
-    while tts_active:
-        engine.say("Precision")
-        engine.runAndWait()
-        time.sleep(2.5)
-
-# -----------------------------
-# DETECTION LOOP THREAD
+# DETECTION LOOP
 # -----------------------------
 
 def detection_loop():
-    global timer_end, token_last, tts_active
+    global timer_end, token_frames
+    global last_pickup_time, tts_active
+
+    lower = np.clip(TARGET_COLOR - COLOR_TOLERANCE, 0, 255)
+    upper = np.clip(TARGET_COLOR + COLOR_TOLERANCE, 0, 255)
 
     with mss.mss() as sct:
-
         while True:
+
             now = time.time()
 
-            buff_img = np.array(sct.grab(buff_roi))
-            token_img = np.array(sct.grab(token_roi))
-
-            buff_gray = cv2.cvtColor(buff_img, cv2.COLOR_BGR2GRAY)
-            token_gray = cv2.cvtColor(token_img, cv2.COLOR_BGR2GRAY)
+            # Screenshot (BGRA → BGR fix)
+            raw = np.array(sct.grab(token_roi))
+            img = raw[:, :, :3]
 
             # -----------------
-            # BUFF DETECT
+            # PIXEL MASK
             # -----------------
 
-            buff_found = False
+            mask = cv2.inRange(img, lower, upper)
+            pixel_count = cv2.countNonZero(mask)
 
-            for template in buff_templates:
-                if template is None:
-                    continue
-
-                res = cv2.matchTemplate(
-                    buff_gray,
-                    template,
-                    cv2.TM_CCOEFF_NORMED
-                )
-
-                if np.max(res) >= BUFF_THRESHOLD:
-                    buff_found = True
-                    break
+            token_found = pixel_count > PIXEL_COUNT_THRESHOLD
 
             # -----------------
-            # TOKEN DETECT
+            # FRAME CONFIRM
             # -----------------
 
-            token_found = False
-
-            for template in token_templates:
-                if template is None:
-                    continue
-
-                res = cv2.matchTemplate(
-                    token_gray,
-                    template,
-                    cv2.TM_CCOEFF_NORMED
-                )
-
-                if np.max(res) >= TOKEN_THRESHOLD:
-                    token_found = True
-                    break
+            if token_found:
+                token_frames += 1
+            else:
+                token_frames = 0
 
             # -----------------
-            # TIMER LOGIKA
+            # TIMER RESET
             # -----------------
 
-            if token_found and not token_last:
+            if (
+                token_frames >= FRAME_CONFIRM
+                and now - last_pickup_time > PICKUP_COOLDOWN
+            ):
                 timer_end = now + 60
-                print("Precision pickup → reset")
-
-            if not buff_found:
-                timer_end = 0
-
-            token_last = token_found
+                last_pickup_time = now
+                print(
+                    f"Precision pickup → reset "
+                    f"({pixel_count}px)"
+                )
 
             # -----------------
             # UI + TTS
@@ -160,9 +132,10 @@ def detection_loop():
                 remaining = timer_end - now
 
                 if remaining > 20:
-                    text = f"Precision: {int(remaining)}s"
-                    label.config(text=text, fg="white")
-
+                    label.config(
+                        text=f"Precision: {int(remaining)}s",
+                        fg="white"
+                    )
                     tts_active = False
 
                 else:
@@ -177,7 +150,6 @@ def detection_loop():
                             target=tts_loop,
                             daemon=True
                         ).start()
-
             else:
                 label.config(
                     text="Precision: Nincs",
@@ -185,10 +157,55 @@ def detection_loop():
                 )
                 tts_active = False
 
-            time.sleep(0.1)
+            # -----------------
+            # DEBUG PREVIEW
+            # -----------------
+
+            if DEBUG:
+
+                preview = img.copy()
+
+                cv2.putText(
+                    preview,
+                    f"px:{pixel_count}",
+                    (10, 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2
+                )
+
+                cv2.putText(
+                    preview,
+                    f"frames:{token_frames}",
+                    (10, 55),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 255),
+                    2
+                )
+
+                if token_found:
+                    cv2.putText(
+                        preview,
+                        "DETECTED",
+                        (10, 85),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 255, 0),
+                        2
+                    )
+
+                cv2.imshow("Token ROI", preview)
+                cv2.imshow("Color Mask", mask)
+
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    break
+
+            time.sleep(0.05)
 
 # -----------------------------
-# THREAD INDÍTÁS
+# THREAD START
 # -----------------------------
 
 threading.Thread(
