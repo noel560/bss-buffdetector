@@ -7,19 +7,16 @@ import threading
 import tkinter as tk
 
 # -----------------------------
-# BEÁLLÍTÁSOK
+# SETTINGS
 # -----------------------------
 
 DEBUG = True
 
-# Precision szem színe (#9429FA → BGR)
 TARGET_COLOR = np.array([250, 41, 148])
 COLOR_TOLERANCE = 20
 
-# Minimum pixel cluster
 PIXEL_COUNT_THRESHOLD = 80
 
-# Pickup védelem
 FRAME_CONFIRM = 10
 PICKUP_COOLDOWN = 1.5
 
@@ -32,44 +29,54 @@ last_pickup_time = 0
 # -----------------------------
 
 tts_active = False
+tts_engine = None
+tts_thread = None
 
 def tts_loop():
-    global tts_active
+    global tts_active, tts_engine
 
-    engine = pyttsx3.init()
-    # engine.setProperty('rate', 180)   # opcionális: ha gyorsabb/lassabb beszéd kell
-    # engine.setProperty('volume', 0.9)
+    if tts_engine is None:
+        tts_engine = pyttsx3.init('sapi5')
+        tts_engine.setProperty('rate', 160)
+        tts_engine.setProperty('volume', 0.9)
+
+    tts_engine.startLoop(False)
 
     while tts_active:
-        engine.say("Precision")
-        engine.runAndWait()
+        tts_engine.say("Precision")
+        print("Refresh precision!")
 
-        if not tts_active:
-            break
+        while tts_active and tts_engine.isBusy():
+            tts_engine.iterate()
+            time.sleep(0.01)
 
-        time.sleep(2.5)   # kb. 2-3 mp-ként mondja újra
+        time.sleep(1.5)
+
+    if tts_engine:
+        tts_engine.endLoop()
+        tts_engine.stop()
 
 # -----------------------------
-# TKINTER ABLAK
+# TKINTER WINDOW
 # -----------------------------
 
 root = tk.Tk()
-root.title("Precision Timer")
+root.title("Buff Detector")
 root.attributes("-topmost", True)
 root.geometry("220x80+50+50")
 root.resizable(False, False)
 
 label = tk.Label(
     root,
-    text="Precision: Nincs",
+    text="Precision: Off",
     font=("Segoe UI", 16),
-    fg="white",
-    bg="black"
+    fg="black",
+    bg="white"
 )
 label.pack(fill="both", expand=True)
 
 # -----------------------------
-# ROI (SZEM HELYE)
+# ROI
 # -----------------------------
 
 token_roi = {
@@ -89,7 +96,6 @@ def detection_loop():
     lower = np.clip(TARGET_COLOR - COLOR_TOLERANCE, 0, 255)
     upper = np.clip(TARGET_COLOR + COLOR_TOLERANCE, 0, 255)
 
-    # Lokális változó a TTS thread kezelésére – NEM globális!
     tts_thread = None
 
     with mss.mss() as sct:
@@ -97,7 +103,7 @@ def detection_loop():
 
             now = time.time()
 
-            # Screenshot (BGRA → BGR)
+            # Screenshot
             raw = np.array(sct.grab(token_roi))
             img = raw[:, :, :3]
 
@@ -138,7 +144,7 @@ def detection_loop():
                 if remaining > 20:
                     label.config(
                         text=f"Precision: {int(remaining)}s",
-                        fg="white"
+                        fg="black"
                     )
                     tts_active = False
 
@@ -148,10 +154,9 @@ def detection_loop():
                         fg="red"
                     )
 
-                    # TTS indítása, ha még nem fut
+                    # TTS
                     if not tts_active:
                         tts_active = True
-                        # Ha nincs thread VAGY már befejeződött → újraindítjuk
                         if tts_thread is None or not tts_thread.is_alive():
                             tts_thread = threading.Thread(
                                 target=tts_loop,
@@ -161,7 +166,7 @@ def detection_loop():
 
             else:
                 label.config(
-                    text="Precision: Nincs",
+                    text="Precision: Off",
                     fg="gray"
                 )
                 tts_active = False
