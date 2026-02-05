@@ -31,15 +31,23 @@ last_pickup_time = 0
 # TTS
 # -----------------------------
 
-engine = pyttsx3.init()
 tts_active = False
 
 def tts_loop():
     global tts_active
+
+    engine = pyttsx3.init()
+    # engine.setProperty('rate', 180)   # opcionális: ha gyorsabb/lassabb beszéd kell
+    # engine.setProperty('volume', 0.9)
+
     while tts_active:
         engine.say("Precision")
         engine.runAndWait()
-        time.sleep(2.5)
+
+        if not tts_active:
+            break
+
+        time.sleep(2.5)   # kb. 2-3 mp-ként mondja újra
 
 # -----------------------------
 # TKINTER ABLAK
@@ -76,25 +84,26 @@ token_roi = {
 # -----------------------------
 
 def detection_loop():
-    global timer_end, token_frames
-    global last_pickup_time, tts_active
+    global timer_end, token_frames, last_pickup_time, tts_active
 
     lower = np.clip(TARGET_COLOR - COLOR_TOLERANCE, 0, 255)
     upper = np.clip(TARGET_COLOR + COLOR_TOLERANCE, 0, 255)
+
+    # Lokális változó a TTS thread kezelésére – NEM globális!
+    tts_thread = None
 
     with mss.mss() as sct:
         while True:
 
             now = time.time()
 
-            # Screenshot (BGRA → BGR fix)
+            # Screenshot (BGRA → BGR)
             raw = np.array(sct.grab(token_roi))
             img = raw[:, :, :3]
 
             # -----------------
             # PIXEL MASK
             # -----------------
-
             mask = cv2.inRange(img, lower, upper)
             pixel_count = cv2.countNonZero(mask)
 
@@ -103,7 +112,6 @@ def detection_loop():
             # -----------------
             # FRAME CONFIRM
             # -----------------
-
             if token_found:
                 token_frames += 1
             else:
@@ -112,22 +120,18 @@ def detection_loop():
             # -----------------
             # TIMER RESET
             # -----------------
-
             if (
                 token_frames >= FRAME_CONFIRM
                 and now - last_pickup_time > PICKUP_COOLDOWN
             ):
                 timer_end = now + 60
                 last_pickup_time = now
-                print(
-                    f"Precision pickup → reset "
-                    f"({pixel_count}px)"
-                )
+                tts_active = False
+                print(f"Precision pickup → reset ({pixel_count}px)")
 
             # -----------------
             # UI + TTS
             # -----------------
-
             if timer_end > now:
                 remaining = timer_end - now
 
@@ -144,12 +148,17 @@ def detection_loop():
                         fg="red"
                     )
 
+                    # TTS indítása, ha még nem fut
                     if not tts_active:
                         tts_active = True
-                        threading.Thread(
-                            target=tts_loop,
-                            daemon=True
-                        ).start()
+                        # Ha nincs thread VAGY már befejeződött → újraindítjuk
+                        if tts_thread is None or not tts_thread.is_alive():
+                            tts_thread = threading.Thread(
+                                target=tts_loop,
+                                daemon=True
+                            )
+                            tts_thread.start()
+
             else:
                 label.config(
                     text="Precision: Nincs",
@@ -160,41 +169,17 @@ def detection_loop():
             # -----------------
             # DEBUG PREVIEW
             # -----------------
-
             if DEBUG:
-
                 preview = img.copy()
 
-                cv2.putText(
-                    preview,
-                    f"px:{pixel_count}",
-                    (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
-
-                cv2.putText(
-                    preview,
-                    f"frames:{token_frames}",
-                    (10, 55),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
-                )
+                cv2.putText(preview, f"px:{pixel_count}", (10, 25),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(preview, f"frames:{token_frames}", (10, 55),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
                 if token_found:
-                    cv2.putText(
-                        preview,
-                        "DETECTED",
-                        (10, 85),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 255, 0),
-                        2
-                    )
+                    cv2.putText(preview, "DETECTED", (10, 85),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
                 cv2.imshow("Token ROI", preview)
                 cv2.imshow("Color Mask", mask)
