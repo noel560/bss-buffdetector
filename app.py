@@ -7,11 +7,21 @@ import threading
 import tkinter as tk
 from tkinter import font
 from ultralytics import YOLO
+import sys
+import os
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # -----------------------------
 # SETTINGS
 # -----------------------------
-DEBUG = True
+DEBUG = False
 YOLO_MODEL_PATH = "best.pt"
 CONF_THRESHOLD = 0.5
 
@@ -31,7 +41,7 @@ tts_active = False
 tts_engine = None
 tts_thread = None
 
-model = YOLO(YOLO_MODEL_PATH)
+model = YOLO(resource_path("best.pt"))
 print(f"YOLO model loaded: {YOLO_MODEL_PATH}")
 
 # -----------------------------
@@ -65,7 +75,7 @@ def tts_loop():
 # TKINTER UI
 # -----------------------------
 root = tk.Tk()
-root.iconbitmap("icon.ico")
+root.iconbitmap(resource_path("icon.ico"))
 root.title("BUFF DETECTOR")
 root.attributes("-topmost", True)
 root.geometry("340x130+50+50")
@@ -94,7 +104,7 @@ content_frame = tk.Frame(main_frame, bg="#202020")
 content_frame.pack(fill="x")
 
 try:
-    icon_img = tk.PhotoImage(file="precision_icon.png")
+    icon_img = tk.PhotoImage(file=resource_path("precision_icon.png"))
     icon_img = icon_img.zoom(1, 1).subsample(1, 1)
     icon_label = tk.Label(content_frame, image=icon_img, bg="#202020")
     icon_label.image = icon_img
