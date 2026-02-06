@@ -6,31 +6,37 @@ import pyttsx3
 import threading
 import tkinter as tk
 from tkinter import font
+from ultralytics import YOLO
 
 # -----------------------------
 # SETTINGS
 # -----------------------------
-DEBUG = False
+DEBUG = True
+YOLO_MODEL_PATH = "best.pt"
+CONF_THRESHOLD = 0.5
 
-TARGET_COLOR = np.array([250, 41, 148])
-COLOR_TOLERANCE = 20
-
-PIXEL_COUNT_THRESHOLD = 80
-
-FRAME_CONFIRM = 10
+TIMER_DURATION = 60
+FRAME_CONFIRM = 3
 PICKUP_COOLDOWN = 1.5
 
+# -----------------------------
+# GLOBALS
+# -----------------------------
 timer_end = 0
-token_frames = 0
+confirm_frames = 0
 last_pickup_time = 0
 
-# -----------------------------
 # TTS
-# -----------------------------
 tts_active = False
 tts_engine = None
 tts_thread = None
 
+model = YOLO(YOLO_MODEL_PATH)
+print(f"YOLO model loaded: {YOLO_MODEL_PATH}")
+
+# -----------------------------
+# TTS loop
+# -----------------------------
 def tts_loop():
     global tts_active, tts_engine
 
@@ -56,7 +62,7 @@ def tts_loop():
         tts_engine.stop()
 
 # -----------------------------
-# TKINTER WINDOW
+# TKINTER UI
 # -----------------------------
 root = tk.Tk()
 root.iconbitmap("icon.ico")
@@ -117,62 +123,48 @@ label = tk.Label(
 label.pack(side="left", fill="x", expand=True)
 
 # -----------------------------
-# ROI
-# -----------------------------
-# token_roi = {
-#     "top": 300,
-#     "left": 800,
-#     "width": 300,
-#     "height": 300
-# }
-token_roi = {
-    "top": 0,
-    "left": 0,
-    "width": 1920,
-    "height": 1080
-}
-
-
-# -----------------------------
 # DETECTION LOOP
 # -----------------------------
 def detection_loop():
-    global timer_end, token_frames, last_pickup_time, tts_active
-
-    lower = np.clip(TARGET_COLOR - COLOR_TOLERANCE, 0, 255)
-    upper = np.clip(TARGET_COLOR + COLOR_TOLERANCE, 0, 255)
+    global timer_end, confirm_frames, last_pickup_time, tts_active
 
     tts_thread = None
 
     with mss.mss() as sct:
-        while True:
+        monitor = {"top": 0, "left": 0, "width": 1920, "height": 1080}
 
+        while True:
             now = time.time()
 
-            raw = np.array(sct.grab(token_roi))
-            img = raw[:, :, :3]
+            raw = np.array(sct.grab(monitor))
+            img = cv2.cvtColor(raw, cv2.COLOR_BGRA2BGR)
 
-            mask = cv2.inRange(img, lower, upper)
-            pixel_count = cv2.countNonZero(mask)
+            results = model(img, imgsz=640, conf=CONF_THRESHOLD, verbose=False)
 
-            token_found = pixel_count > PIXEL_COUNT_THRESHOLD
+            eye_detected = False
+            for result in results:
+                for box in result.boxes:
+                    if int(box.cls) == 0:  # feltételezve, hogy class 0 az "eye"
+                        eye_detected = True
+                        break
+                if eye_detected:
+                    break
 
-            if token_found:
-                token_frames += 1
+            # Frame megerősítés logika
+            if eye_detected:
+                confirm_frames += 1
             else:
-                token_frames = 0
+                confirm_frames = 0
 
-            if (
-                token_frames >= FRAME_CONFIRM
-                and now - last_pickup_time > PICKUP_COOLDOWN
-            ):
-                timer_end = now + 60
+            # Ha elég frame megerősítette és cooldown lejárt → pickup
+            if confirm_frames >= FRAME_CONFIRM and now - last_pickup_time > PICKUP_COOLDOWN:
+                timer_end = now + TIMER_DURATION
                 last_pickup_time = now
                 tts_active = False
-                print(f"Precision pickup → reset ({pixel_count}px)")
+                print(f"Precision pickup! ({confirm_frames} frame megerősítve)")
 
             # -----------------
-            # UI + TTS
+            # UI + TTS frissítés
             # -----------------
             if timer_end > now:
                 remaining = timer_end - now
@@ -206,29 +198,42 @@ def detection_loop():
                 )
                 tts_active = False
 
+            # -----------------
             # DEBUG PREVIEW
+            # -----------------
             if DEBUG:
                 preview = img.copy()
 
-                cv2.putText(preview, f"px:{pixel_count}", (10, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(preview, f"frames:{token_frames}", (10, 55),
+                for result in results:
+                    for box in result.boxes:
+                        if int(box.cls) == 0:
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            conf = box.conf[0]
+                            cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                            cv2.putText(
+                                preview,
+                                f"Eye {conf:.2f}",
+                                (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.6,
+                                (0, 255, 0),
+                                2
+                            )
+
+                # Info text
+                cv2.putText(preview, f"confirm: {confirm_frames}", (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-                if token_found:
-                    cv2.putText(preview, "DETECTED", (10, 85),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-                cv2.imshow("Token ROI", preview)
-                cv2.imshow("Color Mask", mask)
+                small_preview = cv2.resize(preview, (960, 540))
+                cv2.imshow("YOLO Detection Preview", small_preview)
 
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
-            time.sleep(0.05)
+            time.sleep(0.08)
 
 # -----------------------------
-# THREAD START
+# Start
 # -----------------------------
 threading.Thread(
     target=detection_loop,
@@ -236,3 +241,8 @@ threading.Thread(
 ).start()
 
 root.mainloop()
+
+# Cleanup
+cv2.destroyAllWindows()
+if tts_engine:
+    tts_engine.stop()
