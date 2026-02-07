@@ -25,7 +25,7 @@ Using real-time YOLO detection, it instantly recognizes Precision, starts an acc
 
 ## Requirements
 - Windows (tested on Win10/11)
-- Roblox running in 1920*1080 resolution (it may work on 4k too)
+- Roblox running in 1920*1080 resolution
 - Decent GPU recommended for smooth detection (but works on CPU too)
 
 Made with ❤️ for the Bee Swarm community.
